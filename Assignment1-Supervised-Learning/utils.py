@@ -4,6 +4,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.model_selection import learning_curve
 from sklearn.utils import Bunch
+from sklearn import tree
+from sklearn import metrics
+import graphviz
+my_metrics = {"f1": metrics.f1_score, "accuracy": metrics.accuracy_score}
 
 
 def plot_learning_curve(
@@ -17,6 +21,7 @@ def plot_learning_curve(
     n_jobs=None,
     scoring=None,
     train_sizes=np.linspace(0.1, 1.0, 5),
+    detailed=False
 ):
     """
     Generate 3 plots: the test and training learning curve, the training
@@ -81,9 +86,13 @@ def plot_learning_curve(
         sets. Note that for classification the number of samples usually have
         to be big enough to contain at least one sample from each class.
         (default: np.linspace(0.1, 1.0, 5))
+    detailed : bool
+        Dispaly detailed info about learning curves
     """
     if axes is None:
         _, axes = plt.subplots(1, 3, figsize=(20, 5))
+    if not detailed:
+        axes = [axes]
 
     axes[0].set_title(title)
     if ylim is not None:
@@ -132,35 +141,36 @@ def plot_learning_curve(
     )
     axes[0].legend(loc="best")
 
-    # Plot n_samples vs fit_times
-    axes[1].grid()
-    axes[1].plot(train_sizes, fit_times_mean, "o-")
-    axes[1].fill_between(
-        train_sizes,
-        fit_times_mean - fit_times_std,
-        fit_times_mean + fit_times_std,
-        alpha=0.1,
-    )
-    axes[1].set_xlabel("Training examples")
-    axes[1].set_ylabel("fit_times")
-    axes[1].set_title("Scalability of the model")
+    if detailed:
+        # Plot n_samples vs fit_times
+        axes[1].grid()
+        axes[1].plot(train_sizes, fit_times_mean, "o-")
+        axes[1].fill_between(
+            train_sizes,
+            fit_times_mean - fit_times_std,
+            fit_times_mean + fit_times_std,
+            alpha=0.1,
+        )
+        axes[1].set_xlabel("Training examples")
+        axes[1].set_ylabel("fit_times")
+        axes[1].set_title("Scalability of the model")
 
-    # Plot fit_time vs score
-    fit_time_argsort = fit_times_mean.argsort()
-    fit_time_sorted = fit_times_mean[fit_time_argsort]
-    test_scores_mean_sorted = test_scores_mean[fit_time_argsort]
-    test_scores_std_sorted = test_scores_std[fit_time_argsort]
-    axes[2].grid()
-    axes[2].plot(fit_time_sorted, test_scores_mean_sorted, "o-")
-    axes[2].fill_between(
-        fit_time_sorted,
-        test_scores_mean_sorted - test_scores_std_sorted,
-        test_scores_mean_sorted + test_scores_std_sorted,
-        alpha=0.1,
-    )
-    axes[2].set_xlabel("fit_times")
-    axes[2].set_ylabel("Score")
-    axes[2].set_title("Performance of the model")
+        # Plot fit_time vs score
+        fit_time_argsort = fit_times_mean.argsort()
+        fit_time_sorted = fit_times_mean[fit_time_argsort]
+        test_scores_mean_sorted = test_scores_mean[fit_time_argsort]
+        test_scores_std_sorted = test_scores_std[fit_time_argsort]
+        axes[2].grid()
+        axes[2].plot(fit_time_sorted, test_scores_mean_sorted, "o-")
+        axes[2].fill_between(
+            fit_time_sorted,
+            test_scores_mean_sorted - test_scores_std_sorted,
+            test_scores_mean_sorted + test_scores_std_sorted,
+            alpha=0.1,
+        )
+        axes[2].set_xlabel("fit_times")
+        axes[2].set_ylabel("Score")
+        axes[2].set_title("Performance of the model")
 
     return plt
 
@@ -189,3 +199,26 @@ def my_load_wine(path_to_files, return_X_y=False):
         feature_names=list(df_all_wines),
     )
 
+
+def print_tree(estimator, dataset, X_train, y_train):
+    estimator.fit(X_train, y_train)
+    dot_data = tree.export_graphviz(estimator, out_file=None,
+                                    feature_names=dataset.feature_names,
+                                    class_names=dataset.target_names,
+                                    filled=True, rounded=True,
+                                    special_characters=True
+                                    )
+    return graphviz.Source(dot_data)
+
+
+def get_estimator_final_score(estimator, X_train, y_train, X_test, y_test, title, metric, print_result=True):
+    estimator.fit(X_train, y_train)
+    y_pred = estimator.predict(X_test)
+    score = my_metrics[metric](y_pred, y_test)
+    if print_result:
+        print(f"Test {metric} score for {title}: {score}")
+    return score
+
+if __name__ == '__main__':
+    wine = my_load_wine("../Datasets/wine/")
+    print()
