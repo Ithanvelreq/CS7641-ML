@@ -10,6 +10,31 @@ import graphviz
 my_metrics = {"f1": metrics.f1_score, "accuracy": metrics.accuracy_score}
 
 
+def my_load_wine(path_to_files, return_X_y=False):
+    path_red = os.path.join(path_to_files, "winequality-red.csv")
+    path_white = os.path.join(path_to_files, "winequality-white.csv")
+    df_red = pd.read_csv(path_red, delimiter=";")
+    df_white = pd.read_csv(path_white, delimiter=";")
+    red_type_list = [1] * len(df_red.index)  # We encode red wines by 1
+    white_type_list = [0]*len(df_white.index)  # We encode white wines by 0
+    df_red["type"] = red_type_list
+    df_white["type"] = white_type_list
+    df_all_wines = pd.concat([df_red, df_white])
+    target = df_all_wines["quality"]
+    df_all_wines.drop("quality", axis=1, inplace=True)
+    target = target.to_numpy()
+    data = df_all_wines.to_numpy()
+    if return_X_y:
+        return data, target
+
+    return Bunch(
+        data=data,
+        target=target,
+        frame=df_all_wines,
+        feature_names=list(df_all_wines),
+    )
+
+
 def plot_learning_curve(
     estimator,
     title,
@@ -175,31 +200,6 @@ def plot_learning_curve(
     return plt
 
 
-def my_load_wine(path_to_files, return_X_y=False):
-    path_red = os.path.join(path_to_files, "winequality-red.csv")
-    path_white = os.path.join(path_to_files, "winequality-white.csv")
-    df_red = pd.read_csv(path_red, delimiter=";")
-    df_white = pd.read_csv(path_white, delimiter=";")
-    red_type_list = [1] * len(df_red.index)  # We encode red wines by 1
-    white_type_list = [0]*len(df_white.index)  # We encode white wines by 0
-    df_red["type"] = red_type_list
-    df_white["type"] = white_type_list
-    df_all_wines = pd.concat([df_red, df_white])
-    target = df_all_wines["quality"]
-    df_all_wines.drop("quality", axis=1, inplace=True)
-    target = target.to_numpy()
-    data = df_all_wines.to_numpy()
-    if return_X_y:
-        return data, target
-
-    return Bunch(
-        data=data,
-        target=target,
-        frame=df_all_wines,
-        feature_names=list(df_all_wines),
-    )
-
-
 def print_tree(estimator, dataset, X_train, y_train):
     estimator.fit(X_train, y_train)
     dot_data = tree.export_graphviz(estimator, out_file=None,
@@ -219,6 +219,29 @@ def get_estimator_final_score(estimator, X_train, y_train, X_test, y_test, title
         print(f"Test {metric} score for {title}: {score}")
     return score
 
-if __name__ == '__main__':
-    wine = my_load_wine("../Datasets/wine/")
-    print()
+
+def plot_loss_curve(
+    estimator,
+    title,
+    X,
+    y,
+    axes=None,
+    ylim=None,
+):
+    if axes is None:
+        _, axes = plt.subplots(1, 1, figsize=(20, 5))
+    axes = [axes]
+
+    axes[0].set_title(title)
+    if ylim is not None:
+        axes[0].set_ylim(*ylim)
+    axes[0].set_xlabel("Number of iterations")
+    axes[0].set_ylabel("Log-loss value")
+    estimator.fit(X, y)
+    train_scores = estimator.loss_curve_
+
+    # Plot learning curve
+    axes[0].grid()
+    axes[0].plot(train_scores, color="r", label="Training score")
+    axes[0].legend(loc="best")
+    return plt
