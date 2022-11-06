@@ -1,211 +1,324 @@
 import time
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.random_projection import GaussianRandomProjection
+import scipy.stats
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_samples, silhouette_score
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
-import mlrose_hiive as mlrose
 import numpy as np
 import os.path
+from sklearn.neural_network import MLPClassifier
 import pandas as pd
+from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import learning_curve
 from sklearn.utils import Bunch
 from sklearn import metrics
-from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA, FastICA
 my_metrics = {"f1": metrics.f1_score, "accuracy": metrics.accuracy_score}
 
 
-class MyKColors(mlrose.MaxKColor):
-
-    def __init__(self, edges):
-        super().__init__(edges)
-
-    def evaluate(self, state):
-        return -super().evaluate(state)
-
-
-problems = {
-    "four_peaks": {
-        "fitness_function": mlrose.FourPeaks(t_pct=0.05),
-        "problem_max_val": 2
-    },
-    "flip_flop": {
-        "fitness_function": mlrose.FlipFlop(),
-        "problem_max_val": 2
-    },
-    "one_max": {
-        "fitness_function": mlrose.OneMax(),
-        "problem_max_val": 2
-    }
-}
-
-
-def generate_problem(problem_name, problem_length):
-    if problem_name == "max_3_colors":
-        edges = generate_random_graph(problem_length)
-        fitness_function = MyKColors(edges)
-        return mlrose.DiscreteOpt(length=problem_length, fitness_fn=fitness_function,
-                                  maximize=True, max_val=3)
-    else:
-        return mlrose.DiscreteOpt(length=problem_length, fitness_fn=problems[problem_name]["fitness_function"],
-                                  maximize=True, max_val=problems[problem_name]["problem_max_val"])
-
-
-def generate_random_graph(nb_edges):
-    edges = []
-    for i in range(nb_edges):
-        e = np.random.randint(0, high=nb_edges, size=(2,))
-        edges.append((e[0], e[1]))
-    return edges
-
-
-def run_algorithm(algorithm, to_append_metrics, problem_name, problem_length, plot_curve=False):
-    problem = generate_problem(problem_name, problem_length)
+def plot_ig_results(X, y, X_train, y_train, X_test, y_test, metric, axes=None, return_X=-1):
+    nn_score_list = []
     now = time.perf_counter()
-    _, score, curve = algorithm(problem, random_state=42, curve=plot_curve)
-    to_append_metrics.append([score, time.perf_counter() - now, problem.current_iteration, problem.fitness_evaluations])
-    if plot_curve:
-        return curve
+    ig_scores = mutual_info_classif(X, y)
+    wall_clock = (time.perf_counter() - now)*1e3
 
+    # Sort the features
+    indices_sorted = []
+    value_to_index = {}
+    for i, key in enumerate(ig_scores):
+        if value_to_index.get(key, None) is None:
+            value_to_index[key] = [i]
+        else:
+            value_to_index[key].append(i)
 
-def plot_scalability_curves(problem_name, problem_lengths, axes=None):
-    sa_metrics = []
-    rhc_metrics = []
-    ga_metrics = []
-    mimic_metrics = []
-    for problem_length in problem_lengths:
-        if (problem_length < 2) or (problem_length < 3 and problem_name == "Max3Colors"):
-            raise Exception("The problem length has to be at least 3 for Max3Colors and 2 for the others")
-        # Simulated annealing
-        run_algorithm(mlrose.simulated_annealing, sa_metrics, problem_name, problem_length)
-        # Randomized hill climbing
-        run_algorithm(mlrose.random_hill_climb, rhc_metrics, problem_name, problem_length)
-        # Genetic algorithms
-        run_algorithm(mlrose.genetic_alg, ga_metrics, problem_name, problem_length)
-        # MIMIC
-        run_algorithm(mlrose.mimic, mimic_metrics, problem_name, problem_length)
+    ig_scores.sort()
+    ig_scores = np.flip(ig_scores)
+    for score in ig_scores:
+        indices_sorted.append(value_to_index[score][0])
+        del value_to_index[score][0]
 
-    sa_metrics = np.array(sa_metrics)
-    rhc_metrics = np.array(rhc_metrics)
-    ga_metrics = np.array(ga_metrics)
-    mimic_metrics = np.array(mimic_metrics)
+    if return_X != -1:
+        return X[:, indices_sorted[:return_X+1]]
+
+    for i in range(1, len(indices_sorted)+1):
+        X_train_transofrmed = X_train[:, indices_sorted[:i]]
+        X_test_transformed = X_test[:, indices_sorted[:i]]
+        clf = MLPClassifier(activation="logistic", hidden_layer_sizes=(10, 10), random_state=42)
+        clf.fit(X_train_transofrmed, y_train)
+        y_pred = clf.predict(X_test_transformed)
+        score = my_metrics[metric](y_pred, y_test)
+        nn_score_list.append(score)
+
     if axes is None:
-        _, axes = plt.subplots(2, 2, figsize=(20, 5))
-    # Plot score got by each algorithm
-    axes[0, 0].set_xlabel("Problem sizes")
-    axes[0, 0].set_ylabel("Fitness function score")
-    axes[0, 0].grid()
-    axes[0, 0].plot(
-        problem_lengths, sa_metrics[:, 0], "o-", color="r", label="SA"
-    )
-    axes[0, 0].plot(
-        problem_lengths, rhc_metrics[:, 0], "o-", color="g", label="RHC"
-    )
-    axes[0, 0].plot(
-        problem_lengths, ga_metrics[:, 0], "o-", color="b", label="GA"
-    )
-    axes[0, 0].plot(
-        problem_lengths, mimic_metrics[:, 0], "o-", color="k", label="MIMIC"
-    )
-    axes[0, 0].legend(loc="best")
+        _, axes = plt.subplots(1, 4)
     # Plot wall clock time
-    axes[0, 1].set_xlabel("Problem sizes")
-    axes[0, 1].set_ylabel("Wall clock time log(ns)")
-    axes[0, 1].grid()
-    axes[0, 1].plot(
-        problem_lengths, np.log(sa_metrics[:, 1]), "o-", color="r", label="SA"
-    )
-    axes[0, 1].plot(
-        problem_lengths, np.log(rhc_metrics[:, 1]), "o-", color="g", label="RHC"
-    )
-    axes[0, 1].plot(
-        problem_lengths, np.log(ga_metrics[:, 1]), "o-", color="b", label="GA"
-    )
-    axes[0, 1].plot(
-        problem_lengths, np.log(mimic_metrics[:, 1]), "o-", color="k", label="MIMIC"
-    )
-    axes[0, 1].legend(loc="best")
-    # Plot number of iterations
-    axes[1, 0].set_xlabel("Problem sizes")
-    axes[1, 0].set_ylabel("Log Number of iterations")
-    axes[1, 0].grid()
-    axes[1, 0].plot(
-        problem_lengths, np.log(sa_metrics[:, 2]), "o-", color="r", label="SA"
-    )
-    axes[1, 0].plot(
-        problem_lengths, np.log(rhc_metrics[:, 2]), "o-", color="g", label="RHC"
-    )
-    axes[1, 0].plot(
-        problem_lengths, np.log(ga_metrics[:, 2]), "o-", color="b", label="GA"
-    )
-    axes[1, 0].plot(
-        problem_lengths, np.log(mimic_metrics[:, 2]), "o-", color="k", label="MIMIC"
-    )
-    axes[1, 0].legend(loc="best")
-    # Plot number of function evaluations
-    axes[1, 1].set_xlabel("Problem sizes")
-    axes[1, 1].set_ylabel("Log Number of function evaluations")
-    axes[1, 1].grid()
-    axes[1, 1].plot(
-        problem_lengths, np.log(sa_metrics[:, 3]), "o-", color="r", label="SA"
-    )
-    axes[1, 1].plot(
-        problem_lengths, np.log(rhc_metrics[:, 3]), "o-", color="g", label="RHC"
-    )
-    axes[1, 1].plot(
-        problem_lengths, np.log(ga_metrics[:, 3]), "o-", color="b", label="GA"
-    )
-    axes[1, 1].plot(
-        problem_lengths, np.log(mimic_metrics[:, 3]), "o-", color="k", label="MIMIC"
-    )
-    axes[1, 1].legend(loc="best")
+    x_axis = [i for i in range(1, X.shape[1]+1)]
+    axes[0].set_title("Wall clock time (ms)")
+    axes[0].set_xlabel("Number of components")
+    axes[0].grid()
+    axes[0].plot(x_axis, [wall_clock]*len(x_axis))
+    # Plot variance ratio
+    axes[1].set_title("Information Gain per component")
+    axes[1].set_xlabel("Number of components")
+    axes[1].grid()
+    axes[1].plot(x_axis, ig_scores)
+    # Plot Neural Network score
+    axes[2].set_title(f"Neural Network {metric} score")
+    axes[2].set_xlabel("Number of components")
+    axes[2].grid()
+    axes[2].plot(x_axis, nn_score_list)
     return plt
 
 
-def add_loss_curve_to_axe(title, axe, curve, color):
-    axe.set_title(title)
-    axe.set_xlabel("Iteration")
-    axe.set_ylabel("Fitness function score")
-    axe.grid()
-    axe.plot(curve[:, 1], curve[:, 0], color=color)
+def plot_RP_results(seeds, X, X_train, y_train, X_test, y_test, metric, axes=None):
+    wall_clock_time_list = []
+    nn_score_list = []
+    reconstruction_error_list = []
+    variance = []
+    plot_options = ["r", "g", "b"]
+    if axes is None:
+        _, axes = plt.subplots(1, 4)
+    for i, seed in enumerate(seeds):
+        for nb_c in range(1, X.shape[1] + 1):
+            transformer = GaussianRandomProjection(random_state=seed, n_components=nb_c)
+            now = time.perf_counter()
+            transformer.fit(X)
+            wall_clock = (time.perf_counter() - now) * 1e3
+            wall_clock_time_list.append(wall_clock)
+
+            X_train_transofrmed = transformer.transform(X_train)
+            X_test_transformed = transformer.transform(X_test)
+            clf = MLPClassifier(activation="logistic", hidden_layer_sizes=(10, 10), random_state=42)
+            clf.fit(X_train_transofrmed, y_train)
+            y_pred = clf.predict(X_test_transformed)
+            score = my_metrics[metric](y_pred, y_test)
+            nn_score_list.append(score)
+
+            X_transformed = transformer.transform(X)
+            X_reconstructed = transformer.inverse_transform(X_transformed)
+            reconstruction_error = np.sum((X - X_reconstructed) ** 2, axis=1).mean()
+            reconstruction_error_list.append(reconstruction_error)
+            variance.append(np.var(X_transformed, axis=0).mean())
+
+        # Plot wall clock time
+        x_axis = [i for i in range(1, X.shape[1] + 1)]
+        axes[0].set_title("Wall clock time (ms)")
+        axes[0].set_xlabel("Number of principal components")
+        axes[0].grid()
+        axes[0].plot(x_axis, wall_clock_time_list, color=plot_options[i], label=f"random seed {seed}")
+        axes[0].legend(loc="best")
+        # Plot variance ratio
+        axes[1].set_title("Mean variance per component")
+        axes[1].set_xlabel("Number of principal components")
+        axes[1].grid()
+        axes[1].plot(x_axis, variance, color=plot_options[i], label=f"random seed {seed}")
+        axes[1].legend(loc="best")
+        # Plot reconstruction error
+        axes[2].set_title("Reconstruction error mse")
+        axes[2].set_xlabel("Number of principal components")
+        axes[2].grid()
+        axes[2].plot(x_axis, reconstruction_error_list, color=plot_options[i], label=f"random seed {seed}")
+        axes[2].legend(loc="best")
+        # Plot Neural Network score
+        axes[3].set_title(f"Neural Network {metric} score")
+        axes[3].set_xlabel("Number of principal components")
+        axes[3].grid()
+        axes[3].plot(x_axis, nn_score_list, color=plot_options[i], label=f"random seed {seed}")
+        axes[3].legend(loc="best")
+
+        wall_clock_time_list = []
+        nn_score_list = []
+        reconstruction_error_list = []
+        variance = []
+    return plt
 
 
-def plot_loss_curves(problem_name, problem_length, axes=None):
+def plot_transformer_results(algorithm, X, X_train, y_train, X_test, y_test, metric, axes=None):
+    wall_clock_time_list = []
+    nn_score_list = []
+    reconstruction_error_list = []
+    kurtosis = []
+    for nb_c in range(1, X.shape[1]+1):
+        if algorithm == "PCA":
+            transformer = PCA(n_components=nb_c)
+        elif algorithm == "ICA":
+            transformer = FastICA(n_components=nb_c)
+        else:
+            raise Exception("Not Implemented")
+        now = time.perf_counter()
+        transformer.fit(X)
+        wall_clock = (time.perf_counter() - now)*1e3
+        wall_clock_time_list.append(wall_clock)
 
-    if (problem_length < 2) or (problem_length < 3 and problem_name == "Max3Colors"):
-        raise Exception("The problem length has to be at least 3 for Max3Colors and 2 for the others")
-    # Simulated annealing
-    sa_curve = run_algorithm(mlrose.simulated_annealing, [], problem_name, problem_length, plot_curve=True)
-    # Randomized hill climbing
-    rhc_curve = run_algorithm(mlrose.random_hill_climb, [], problem_name, problem_length, plot_curve=True)
-    # Genetic algorithms
-    ga_curve = run_algorithm(mlrose.genetic_alg, [], problem_name, problem_length, plot_curve=True)
-    # MIMIC
-    mimic_curve = run_algorithm(mlrose.mimic, [], problem_name, problem_length, plot_curve=True)
+        X_train_transofrmed = transformer.transform(X_train)
+        X_test_transformed = transformer.transform(X_test)
+        clf = MLPClassifier(activation="logistic", hidden_layer_sizes=(10, 10), random_state=42)
+        clf.fit(X_train_transofrmed, y_train)
+        y_pred = clf.predict(X_test_transformed)
+        score = my_metrics[metric](y_pred, y_test)
+        nn_score_list.append(score)
+
+
+        X_transformed = transformer.transform(X)
+        X_reconstructed = transformer.inverse_transform(X_transformed)
+        reconstruction_error = np.sum((X - X_reconstructed) ** 2, axis=1).mean()
+        reconstruction_error_list.append(reconstruction_error)
+
+        if algorithm == "ICA":
+            kurtosis.append(np.abs(scipy.stats.kurtosis(X_transformed)).mean())
+
+    if algorithm == "PCA":
+        transformer = PCA(n_components=X.shape[1])
+        transformer.fit(X)
+        particular_title = "Variance ratio per principal component"
+        particular_data = transformer.explained_variance_ratio_
+    elif algorithm == "ICA":
+        particular_title = "Absolute mean kurtosis per component"
+        particular_data = kurtosis
+    else:
+        raise Exception("Not Implemented")
 
     if axes is None:
-        _, axes = plt.subplots(2, 2, figsize=(20, 5))
-    # Plot score got by each algorithm
-    add_loss_curve_to_axe("Loss curve for SA", axes[0, 0], sa_curve, "r")
-    add_loss_curve_to_axe("Loss curve for RHC", axes[0, 1], rhc_curve, "g")
-    add_loss_curve_to_axe("Loss curve for GA", axes[1, 0], ga_curve, "b")
-    add_loss_curve_to_axe("Loss curve for MIMIC", axes[1, 1], mimic_curve, "k")
+        _, axes = plt.subplots(1, 4)
+    # Plot wall clock time
+    x_axis = [i for i in range(1, X.shape[1]+1)]
+    axes[0].set_title("Wall clock time (ms)")
+    axes[0].set_xlabel("Number of principal components")
+    axes[0].grid()
+    axes[0].plot(x_axis, wall_clock_time_list)
+    # Plot variance ratio
+    axes[1].set_title(particular_title)
+    axes[1].set_xlabel("Number of principal components")
+    axes[1].grid()
+    axes[1].plot(x_axis, particular_data)
+    # Plot reconstruction error
+    axes[2].set_title("Reconstruction error mse")
+    axes[2].set_xlabel("Number of principal components")
+    axes[2].grid()
+    axes[2].plot(x_axis, reconstruction_error_list)
+    # Plot Neural Network score
+    axes[3].set_title(f"Neural Network {metric} score")
+    axes[3].set_xlabel("Number of principal components")
+    axes[3].grid()
+    axes[3].plot(x_axis, nn_score_list)
     return plt
 
 
-def plot_fitness_curves(curve, axe, title):
-    axe.set_title(title)
-    axe.set_xlabel("Iteration")
-    axe.set_ylabel("Fitness function score")
-    axe.grid()
-    axe.plot(curve[:, 1], curve[:, 0], color="r")
+def plot_silhouette(clustering_algorithm, X, range_n_clusters, xlim=None):
+    for n_clusters in range_n_clusters:
+        # Create a subplot with 1 row and 2 columns
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        fig.set_size_inches(18, 7)
+
+        # The 1st subplot is the silhouette plot
+        # The silhouette coefficient can range from -1, 1 but in this example all
+        # lie within [-0.1, 1]
+        if xlim is None:
+            xlim = [-0.5, 1]
+        ax1.set_xlim(xlim)
+        # The (n_clusters+1)*10 is for inserting blank space between silhouette
+        # plots of individual clusters, to demarcate them clearly.
+        ax1.set_ylim([0, len(X) + (n_clusters + 1) * 10])
+
+        if clustering_algorithm == "KMeans":
+            clusterer = KMeans(n_clusters=n_clusters, random_state=42)
+        elif clustering_algorithm == "GaussianMixture":
+            clusterer = GaussianMixture(n_components=n_clusters, random_state=42)
+        else:
+            raise Exception("Not implemented")
+        now = time.perf_counter()
+        cluster_labels = clusterer.fit_predict(X)
+        end = time.perf_counter() - now
+        # The silhouette_score gives the average value for all the samples.
+        # This gives a perspective into the density and separation of the formed
+        # clusters
+        silhouette_avg = silhouette_score(X, cluster_labels)
+        print(f"For n_clusters = {n_clusters} The average silhouette_score is :{silhouette_avg:.3f}"
+              f". Took {end*1e3:.1f} ms")
+
+        # Compute the silhouette scores for each sample
+        sample_silhouette_values = silhouette_samples(X, cluster_labels)
+
+        y_lower = 10
+        for i in range(n_clusters):
+            # Aggregate the silhouette scores for samples belonging to
+            # cluster i, and sort them
+            ith_cluster_silhouette_values = sample_silhouette_values[cluster_labels == i]
+
+            ith_cluster_silhouette_values.sort()
+
+            size_cluster_i = ith_cluster_silhouette_values.shape[0]
+            y_upper = y_lower + size_cluster_i
+
+            color = cm.nipy_spectral(float(i) / n_clusters)
+            ax1.fill_betweenx(
+                np.arange(y_lower, y_upper),
+                0,
+                ith_cluster_silhouette_values,
+                facecolor=color,
+                edgecolor=color,
+                alpha=0.7,
+            )
+
+            # Label the silhouette plots with their cluster numbers at the middle
+            ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+
+            # Compute the new y_lower for next plot
+            y_lower = y_upper + 10  # 10 for the 0 samples
+
+        ax1.set_title(f"The silhouette plot for the various clusters. {clustering_algorithm} and {n_clusters} clusters")
+        ax1.set_xlabel("The silhouette coefficient values")
+        ax1.set_ylabel("Cluster label")
+
+        # The vertical line for average silhouette score of all the values
+        ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
+
+        ax1.set_yticks([])  # Clear the yaxis labels / ticks
+        ax1.set_xticks(np.arange(xlim[0], xlim[1]+.2, .2))
+
+        # 2nd Plot showing the actual clusters formed
+        colors = cm.nipy_spectral(cluster_labels.astype(float) / n_clusters)
+        ax2.scatter(
+            X[:, 0], X[:, 1], marker=".", s=30, lw=0, alpha=0.7, c=colors, edgecolor="k"
+        )
+
+        # Labeling the clusters
+        if clustering_algorithm == "KMeans":
+            centers = clusterer.cluster_centers_
+        else:
+            centers = clusterer.means_
+        # Draw white circles at cluster centers
+        ax2.scatter(
+            centers[:, 0],
+            centers[:, 1],
+            marker="o",
+            c="white",
+            alpha=1,
+            s=200,
+            edgecolor="k",
+        )
+
+        for i, c in enumerate(centers):
+            ax2.scatter(c[0], c[1], marker="$%d$" % i, alpha=1, s=50, edgecolor="k")
+
+        ax2.set_title("The visualization of the clustered data.")
+        ax2.set_xlabel("Feature space for the 1st feature")
+        ax2.set_ylabel("Feature space for the 2nd feature")
+
+        plt.suptitle(
+            f"Silhouette analysis for {clustering_algorithm} clustering on sample data with n_clusters = {n_clusters}",
+            fontsize=14,
+            fontweight="bold",
+        )
+
     return plt
 
 
-def one_hot_encoding(target):
-    hot_targets = np.zeros((target.shape[0], 10))
-    for i, t in enumerate(target):
-        hot_targets[i, t - 1] = 1
-    return hot_targets
-
-
-def my_load_wine(path_to_files, return_X_y=False, hot_encode=False):
+def my_load_wine(path_to_files, return_X_y=False):
     path_red = os.path.join(path_to_files, "winequality-red.csv")
     path_white = os.path.join(path_to_files, "winequality-white.csv")
     df_red = pd.read_csv(path_red, delimiter=";")
@@ -219,8 +332,6 @@ def my_load_wine(path_to_files, return_X_y=False, hot_encode=False):
     df_all_wines.drop("quality", axis=1, inplace=True)
     target = target.to_numpy()
     data = df_all_wines.to_numpy()
-    if hot_encode:
-        target = one_hot_encoding(target)
     if return_X_y:
         return data, target
 
@@ -432,16 +543,13 @@ def get_estimator_final_score(estimator, X_train, y_train, X_test, y_test, title
 
 
 if __name__ == '__main__':
-    wine = my_load_wine("../Datasets/wine/", hot_encode=True)
-    X, y = wine.data, wine.target
+    breast_cancer = load_breast_cancer()
+    X, y = breast_cancer.data, breast_cancer.target
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
-    algorithms = ["gradient_descent", "random_hill_climb", "simulated_annealing", "genetic_alg"]
-    _, axes = plt.subplots(1, 4, figsize=(20, 5))
-    for i, alg in enumerate(algorithms):
-        axe_to_plot = axes[i]
-        estimator = mlrose.NeuralNetwork([10], algorithm=alg, max_iters=1000, early_stopping=True, max_attempts=10,
-                                         random_state=42, curve=True)
-        estimator.fit(X_train, y_train)
-        title = f"Algorithm: {alg}"
-        plot_loss_curve(estimator, title, X_train, y_train, axes=axe_to_plot)
+    clusterer = KMeans(n_clusters=2, random_state=42)
+    cluster_labels = clusterer.fit_predict(X)
+    X = np.concatenate((X, np.expand_dims(cluster_labels, axis=1)), axis=1)
+    clf = MLPClassifier(activation="logistic", hidden_layer_sizes=(10, 10), random_state=42)
+    title = f"Added K-Means labels"
+    plot_learning_curve(clf, title, X_train, y_train, axes=None, detailed=True)
 
